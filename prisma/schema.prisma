@@ -1,0 +1,22 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Image {
+  id        String    @id @default(uuid())
+  url       String    @db.VarChar(2048)
+  title     String?   @db.VarChar(255)
+  width     Int
+  height    Int
+  status    String    @default("processing") @db.VarChar(50)
+  createdAt DateTime  @default(now()) @map("created_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  @@index([deletedAt])
+  @@map("images")
+}

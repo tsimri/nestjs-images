@@ -1,0 +1,125 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fm-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fm_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - fm-network
+
+  localstack:
+    image: localstack/localstack:latest
+    container_name: fm-localstack
+    ports:
+      - "4566:4566"
+      - "4510-4559:4510-4559"
+    environment:
+      - SERVICES=s3
+      - DEBUG=1
+      - DATA_DIR=/var/lib/localstack/data
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - PERSISTENCE=1
+    volumes:
+      - localstack_data:/var/lib/localstack
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - fm-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  init-localstack:
+    image: amazon/aws-cli:latest
+    container_name: fm-init-localstack
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_REGION=us-east-1
+      - AWS_S3_BUCKET_NAME=fm-bucket
+    volumes:
+      - ./scripts/init-localstack.sh:/init-localstack.sh
+    entrypoint: []
+    command: ["/bin/sh", "/init-localstack.sh"]
+    networks:
+      - fm-network
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    container_name: fm-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - fm-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fm-app
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - DATABASE_HOST=postgres
+      - DATABASE_PORT=5432
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
+      - DATABASE_NAME=fm_db
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_PUBLIC_ENDPOINT_URL=http://localhost:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_REGION=us-east-1
+      - AWS_S3_BUCKET_NAME=fm-bucket
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/fm_db?schema=public
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      init-localstack:
+        condition: service_completed_successfully
+    networks:
+      - fm-network
+    command: sh -c "npx prisma generate && npx prisma migrate deploy && npm run start:dev"
+
+volumes:
+  postgres_data:
+  localstack_data:
+
+networks:
+  fm-network:
+    driver: bridge
+
